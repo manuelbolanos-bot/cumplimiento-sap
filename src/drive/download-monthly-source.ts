@@ -50,6 +50,18 @@ const OUTPUT_ROOT =
     "data/drive-temp"
   );
 
+/*
+ * Carpeta raíz oficial existente en Google Drive.
+ * NO se crean ni se mueven carpetas mensuales.
+ *
+ * 6_Cumplimiento diario
+ */
+const ROOT_FOLDER_ID =
+  "1szetH7FKFWwpisqSF6quISkZ87R51fc7";
+
+const ROOT_FOLDER_NAME =
+  "6_Cumplimiento diario";
+
 const MONTH_WORDS:
 Record<number, string[]> = {
   1: ["enero", "ene", "jan"],
@@ -110,6 +122,16 @@ Args {
 function obtenerConfig(
   periodo: string
 ): PeriodConfig {
+  /*
+   * La raíz de Drive es GLOBAL.
+   *
+   * drive_period_folders se conserva únicamente para:
+   * - compatibilidad con process-month.ts;
+   * - recordar el archivo seleccionado para cada período;
+   * - permitir una preferencia exacta ya guardada.
+   *
+   * Ya NO se exige configurar una carpeta por cada mes.
+   */
   const row =
     db.prepare(`
       SELECT
@@ -128,22 +150,16 @@ function obtenerConfig(
         periodo
       ) as PeriodConfig | undefined;
 
-  if (
-    !row
-  ) {
-    throw new Error(
-      [
-        `No hay carpeta Drive configurada para ${periodo}.`,
-        "",
-        "Configúrala primero con:",
-        `npm run drive:configurar -- --periodo=${periodo} --folder-id=ID`,
-      ].join(
-        "\n"
-      )
-    );
-  }
-
-  return row;
+  return {
+    periodo,
+    folder_id:
+      ROOT_FOLDER_ID,
+    folder_name:
+      ROOT_FOLDER_NAME,
+    source_file_name:
+      row?.source_file_name ??
+      null,
+  };
 }
 
 /* =========================================================
@@ -785,7 +801,7 @@ Promise<void> {
   );
 
   console.log(
-    "DESCARGA DE FUENTE MENSUAL DESDE GOOGLE DRIVE - V2"
+    "DESCARGA DE FUENTE MENSUAL DESDE GOOGLE DRIVE - V3"
   );
 
   console.log(
@@ -857,29 +873,64 @@ Promise<void> {
   );
 
   /*
-   * Guardamos el nombre LOCAL resultante.
-   * process-month.ts usa este nombre para localizar
-   * el archivo en data/drive-temp/<periodo>/.
+   * Guardamos/actualizamos el período automáticamente.
+   *
+   * process-month.ts sigue leyendo source_file_name desde
+   * drive_period_folders, así que mantenemos esa tabla sin
+   * obligar al usuario a ejecutar drive:configurar cada mes.
    */
+  const now =
+    new Date()
+      .toISOString();
+
   db.prepare(`
-    UPDATE
-      drive_period_folders
-
-    SET
-      source_file_name = ?,
-      updated_at = ?
-
-    WHERE
-      periodo = ?
-  `)
-    .run(
-      path.basename(
-        outputPath
-      ),
-      new Date()
-        .toISOString(),
+    INSERT INTO drive_period_folders (
+      periodo,
+      folder_id,
+      folder_name,
+      source_file_name,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @periodo,
+      @folderId,
+      @folderName,
+      @sourceFileName,
+      @createdAt,
+      @updatedAt
+    )
+    ON CONFLICT (
       periodo
-    );
+    )
+    DO UPDATE SET
+      folder_id =
+        excluded.folder_id,
+
+      folder_name =
+        excluded.folder_name,
+
+      source_file_name =
+        excluded.source_file_name,
+
+      updated_at =
+        excluded.updated_at
+  `)
+    .run({
+      periodo,
+      folderId:
+        ROOT_FOLDER_ID,
+      folderName:
+        ROOT_FOLDER_NAME,
+      sourceFileName:
+        path.basename(
+          outputPath
+        ),
+      createdAt:
+        now,
+      updatedAt:
+        now,
+    });
 
   console.log(
     "\nDOWNLOAD_PATH=" +

@@ -1970,19 +1970,81 @@ function generarHojasSemanales(
       workbook
     );
 
+  /*
+   * Algunos meses ocupan 5 o 6 semanas ISO.
+   * La plantilla histórica puede traer menos hojas Sxx.
+   *
+   * En lugar de abortar, clonamos una hoja semanal existente
+   * para completar únicamente las hojas necesarias.
+   */
+  if (
+    hojas.length ===
+    0
+  ) {
+    throw new Error(
+      "La plantilla no contiene ninguna hoja semanal Sxx que pueda usarse como base."
+    );
+  }
+
   if (
     hojas.length <
     semanas.length
   ) {
-    throw new Error(
-      [
-        "No existen suficientes hojas semanales.",
-        `Necesarias: ${semanas.length}`,
-        `Disponibles: ${hojas.length}`,
-      ].join(
-        "\n"
-      )
+    const faltantes =
+      semanas.length -
+      hojas.length;
+
+    const hojaBase =
+      hojas[
+        hojas.length -
+        1
+      ];
+
+    console.log(
+      `⚠ La plantilla tiene ${hojas.length} hoja(s) semanal(es), pero el período necesita ${semanas.length}.`
     );
+
+    console.log(
+      `✓ Se crearán automáticamente ${faltantes} hoja(s) semanal(es) adicional(es).`
+    );
+
+    for (
+      let i =
+        0;
+      i <
+        faltantes;
+      i++
+    ) {
+      const nombreTemporal =
+        `TMP_WEEK_EXTRA_${i + 1}`;
+
+      const clon =
+        workbook.cloneSheet(
+          hojaBase,
+          nombreTemporal
+        );
+
+      /*
+       * Dejamos el clon visible y lo limpiamos antes
+       * de asignarle su semana definitiva.
+       */
+      try {
+        clon.hidden(
+          false
+        );
+      } catch {
+        // La hoja ya es visible o la versión de la librería
+        // no expone hidden() como setter en este contexto.
+      }
+
+      limpiarHojaSemanal(
+        clon
+      );
+
+      hojas.push(
+        clon
+      );
+    }
   }
 
   hojas.forEach(
@@ -5480,6 +5542,157 @@ async function repararMetadatosXlsx(
         ].dir
     );
 
+  /*
+   * XlsxPopulate puede clonar una hoja y crear correctamente
+   * xl/worksheets/sheetNN.xml, pero no siempre agrega el
+   * Override correspondiente en [Content_Types].xml.
+   *
+   * Sin ese Override, el paquete declara la hoja nueva como
+   * application/xml en vez de worksheet+xml y algunos lectores
+   * (incluido Excel en escenarios de validación estricta)
+   * pueden considerar el XLSX dañado.
+   *
+   * Normalizamos TODOS los worksheets presentes en el ZIP.
+   */
+  const contentTypesWorksheetsFile =
+    zip.file(
+      "[Content_Types].xml"
+    );
+
+  if (
+    contentTypesWorksheetsFile
+  ) {
+    let contentTypes =
+      await contentTypesWorksheetsFile.async(
+        "string"
+      );
+
+    let overridesAgregados =
+      0;
+
+    for (
+      const nombre of
+        worksheetFiles
+    ) {
+      const partName =
+        `/${nombre}`;
+
+      const escapedPartName =
+        partName.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        );
+
+      const overrideRegex =
+        new RegExp(
+          `<Override\\b(?=[^>]*\\bPartName="${escapedPartName}")(?=[^>]*\\bContentType="application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.worksheet\\+xml")[^>]*/>`,
+          "i"
+        );
+
+      if (
+        overrideRegex.test(
+          contentTypes
+        )
+      ) {
+        continue;
+      }
+
+      const nuevoOverride =
+        `<Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml" PartName="${partName}"/>`;
+
+      contentTypes =
+        contentTypes.replace(
+          /<\/Types>\s*$/i,
+          `${nuevoOverride}</Types>`
+        );
+
+      overridesAgregados++;
+    }
+
+    zip.file(
+      "[Content_Types].xml",
+      contentTypes
+    );
+
+    if (
+      overridesAgregados >
+      0
+    ) {
+      console.log(
+        `✓ Content Types reparado: ${overridesAgregados} worksheet(s) registrado(s).`
+      );
+    }
+  }
+
+  /*
+   * Sanitizar valores numéricos no finitos.
+   *
+   * XlsxPopulate puede serializar celdas vacías heredadas como
+   * <v>NaN</v> al reescribir algunas hojas con contenido histórico.
+   * Excel considera esos valores inválidos y repara la hoja al abrir.
+   *
+   * Conservamos la celda y su estilo, pero dejamos el valor vacío,
+   * equivalente al comportamiento de la plantilla original.
+   */
+  let valoresNoFinitosLimpiados =
+    0;
+
+  for (
+    const nombre of
+      worksheetFiles
+  ) {
+    const archivoWorksheet =
+      zip.file(
+        nombre
+      );
+
+    if (
+      !archivoWorksheet
+    ) {
+      continue;
+    }
+
+    let xmlWorksheet =
+      await archivoWorksheet.async(
+        "string"
+      );
+
+    const coincidencias =
+      xmlWorksheet.match(
+        /<v>\s*(?:NaN|Infinity|-Infinity)\s*<\/v>/gi
+      ) ?? [];
+
+    if (
+      coincidencias.length ===
+      0
+    ) {
+      continue;
+    }
+
+    valoresNoFinitosLimpiados +=
+      coincidencias.length;
+
+    xmlWorksheet =
+      xmlWorksheet.replace(
+        /<v>\s*(?:NaN|Infinity|-Infinity)\s*<\/v>/gi,
+        "<v></v>"
+      );
+
+    zip.file(
+      nombre,
+      xmlWorksheet
+    );
+  }
+
+  if (
+    valoresNoFinitosLimpiados >
+    0
+  ) {
+    console.log(
+      `✓ Valores numéricos inválidos saneados: ${valoresNoFinitosLimpiados}.`
+    );
+  }
+
   let formulasCongeladoEliminadas =
     0;
 
@@ -6015,7 +6228,7 @@ Promise<void> {
   );
 
   console.log(
-    "GENERADOR EXCEL V3.3 - CUMPLIMIENTO PRODUCCION"
+    "GENERADOR EXCEL V3.3.3 - CUMPLIMIENTO PRODUCCION"
   );
 
   console.log(
@@ -6484,7 +6697,7 @@ Promise<void> {
   );
 
   console.log(
-    "\n✓ EXCEL V3.3 DIARIO + SEMANAL + MES + % + RESUMEN + ANUAL GENERADO"
+    "\n✓ EXCEL V3.3.3 DIARIO + SEMANAL + MES + % + RESUMEN + ANUAL GENERADO"
   );
 
   console.log(

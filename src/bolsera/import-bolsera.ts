@@ -403,25 +403,11 @@ function convertirFecha(
 
 function validarFechaPeriodo(
   fecha: string,
-  periodo: string,
-  contexto: string
-): void {
-  if (
-    !fecha.startsWith(
-      `${periodo}-`
-    )
-  ) {
-    throw new Error(
-      [
-        "PERIODO INVALIDO EN BOLSERA",
-        `Esperado: ${periodo}`,
-        `Encontrado: ${fecha}`,
-        `Contexto: ${contexto}`,
-      ].join(
-        "\n"
-      )
-    );
-  }
+  periodo: string
+): boolean {
+  return fecha.startsWith(
+    `${periodo}-`
+  );
 }
 
 /* =========================================================
@@ -551,6 +537,9 @@ Promise<BolseraRow[]> {
   const resultado:
     BolseraRow[] = [];
 
+  const filasFueraPeriodo:
+    string[] = [];
+
   const nombreArchivo =
     path.basename(
       archivo
@@ -574,6 +563,9 @@ Promise<BolseraRow[]> {
     }
 
     let filasConDatos =
+      0;
+
+    let filasIgnoradasPeriodo =
       0;
 
     for (
@@ -639,11 +631,20 @@ Promise<BolseraRow[]> {
         continue;
       }
 
-      validarFechaPeriodo(
-        fecha,
-        periodo,
-        `${config.sheetName}!A${row}`
-      );
+      if (
+        !validarFechaPeriodo(
+          fecha,
+          periodo
+        )
+      ) {
+        filasIgnoradasPeriodo++;
+
+        filasFueraPeriodo.push(
+          `${config.sheetName}!A${row} -> ${fecha}`
+        );
+
+        continue;
+      }
 
       const plan =
         planRaw ??
@@ -723,6 +724,54 @@ Promise<BolseraRow[]> {
       `✓ ${config.sheetName.padEnd(
         6
       )}: ${filasConDatos} día(s) con datos`
+    );
+
+    if (
+      filasIgnoradasPeriodo >
+      0
+    ) {
+      console.log(
+        `⚠ ${config.sheetName.padEnd(
+          6
+        )}: ${filasIgnoradasPeriodo} fila(s) fuera del período ${periodo} ignorada(s)`
+      );
+    }
+  }
+
+  if (
+    filasFueraPeriodo.length >
+    0
+  ) {
+    console.log(
+      "\nAdvertencias de período:"
+    );
+
+    const maxMostrar =
+      20;
+
+    for (
+      const detalle of
+      filasFueraPeriodo.slice(
+        0,
+        maxMostrar
+      )
+    ) {
+      console.log(
+        `- ${detalle}`
+      );
+    }
+
+    if (
+      filasFueraPeriodo.length >
+      maxMostrar
+    ) {
+      console.log(
+        `- ... ${filasFueraPeriodo.length - maxMostrar} fila(s) adicional(es) omitida(s) del detalle`
+      );
+    }
+
+    console.log(
+      `\n⚠ Total de filas fuera de ${periodo} ignoradas: ${filasFueraPeriodo.length}`
     );
   }
 
@@ -1082,7 +1131,7 @@ Promise<void> {
   );
 
   console.log(
-    "IMPORTADOR BOLSERA - FUENTE MENSUAL"
+    "IMPORTADOR BOLSERA - FUENTE MENSUAL V2"
   );
 
   console.log(
