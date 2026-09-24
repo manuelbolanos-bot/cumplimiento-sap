@@ -1,6 +1,6 @@
 export const BIGQUERY_CONFIG = {
   projectId:
-    "cumplimiento-produccion-499118",
+    "cumplimiento-produccion-509620",
 
   datasetId:
     "cumplimiento_produccion_v2",
